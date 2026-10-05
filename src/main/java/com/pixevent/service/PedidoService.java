@@ -1,12 +1,15 @@
 package com.pixevent.service;
 
+import com.pixevent.dto.CancelarResultado;
 import com.pixevent.dto.ConfirmarResultado;
 import com.pixevent.dto.ItemNormalizado;
+import com.pixevent.dto.PedidoResponse;
 import com.pixevent.dto.RegistrarPedidoResultado;
 import com.pixevent.entity.Pedido;
 import com.pixevent.entity.Produto;
 import com.pixevent.entity.StatusPedido;
 import com.pixevent.exception.ApiException;
+import com.pixevent.mapper.PedidoMapper;
 import com.pixevent.repository.PedidoRepository;
 import com.pixevent.util.QrCodeUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,9 +26,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * Porta de src/services/PedidoService.js.
- */
 @Service
 public class PedidoService {
 
@@ -39,10 +39,13 @@ public class PedidoService {
 
     private final PedidoRepository pedidoRepository;
     private final MesaService mesaService;
+    private final PedidoMapper pedidoMapper;
 
-    public PedidoService(PedidoRepository pedidoRepository, MesaService mesaService) {
+    public PedidoService(PedidoRepository pedidoRepository, MesaService mesaService,
+                         PedidoMapper pedidoMapper) {
         this.pedidoRepository = pedidoRepository;
         this.mesaService = mesaService;
+        this.pedidoMapper = pedidoMapper;
     }
 
     private static String gerarId() {
@@ -97,7 +100,7 @@ public class PedidoService {
 
     @Transactional
     public RegistrarPedidoResultado registrarPedido(String nome, String telefone, String cpf,
-                                                      List<ItemNormalizado> itensBrutos, Object mesaNumero) {
+                                                    List<ItemNormalizado> itensBrutos, Object mesaNumero) {
         List<ItemNormalizado> itens = normalizarItens(itensBrutos);
         com.pixevent.util.ValidationUtil.validarCadastro(nome, cpf, telefone);
 
@@ -189,16 +192,16 @@ public class PedidoService {
 
         String qrcodeBase64 = QrCodeUtil.toDataUrl(qrcodeToken, 300);
 
-        return new ConfirmarResultado(qrcodeBase64, qrcodeToken, pedido);
+        return new ConfirmarResultado(qrcodeBase64, qrcodeToken, pedidoMapper.toResponse(pedido));
     }
 
     @Transactional
-    public Object[] cancelarPedido(String pedidoId) {
+    public CancelarResultado cancelarPedido(String pedidoId) {
         Pedido pedido = pedidoRepository.findById(pedidoId)
                 .orElseThrow(() -> ApiException.notFound("Pedido não encontrado."));
 
         if (pedido.getStatus() == StatusPedido.CANCELADO) {
-            return new Object[]{pedido, 0, true};
+            return new CancelarResultado(pedidoMapper.toResponse(pedido), 0, true);
         }
 
         int mesasLiberadas = mesaService.liberarDoPedido(pedidoId);
@@ -217,11 +220,12 @@ public class PedidoService {
         pedido.setQrcodeUsadoEm(OffsetDateTime.now());
         pedidoRepository.save(pedido);
 
-        return new Object[]{pedido, mesasLiberadas, false};
+        return new CancelarResultado(pedidoMapper.toResponse(pedido), mesasLiberadas, false);
     }
 
-    public List<Pedido> buscarPorNome(String termo) {
-        return pedidoRepository.findByNomeContainingIgnoreCaseOrderByCriadoEmDesc(termo);
+    public List<PedidoResponse> buscarPorNome(String termo) {
+        return pedidoMapper.toResponseList(
+                pedidoRepository.findByNomeContainingIgnoreCaseOrderByCriadoEmDesc(termo));
     }
 
     private static String gerarTokenHex(int bytes) {

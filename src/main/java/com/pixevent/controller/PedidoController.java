@@ -2,6 +2,7 @@ package com.pixevent.controller;
 
 import com.pixevent.dto.ItemNormalizado;
 import com.pixevent.dto.PedidoRequest;
+import com.pixevent.dto.PedidoResponse;
 import com.pixevent.dto.RegistrarPedidoResultado;
 import com.pixevent.entity.Pedido;
 import com.pixevent.exception.ApiException;
@@ -14,9 +15,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
-/**
- MesaController.
- */
+
 @RestController
 @RequestMapping("/api/pedido")
 public class PedidoController {
@@ -26,7 +25,7 @@ public class PedidoController {
     private final AdminAuthService adminAuthService;
 
     public PedidoController(PedidoService pedidoService, PedidoRepository pedidoRepository,
-                             AdminAuthService adminAuthService) {
+                            AdminAuthService adminAuthService) {
         this.pedidoService = pedidoService;
         this.pedidoRepository = pedidoRepository;
         this.adminAuthService = adminAuthService;
@@ -49,9 +48,9 @@ public class PedidoController {
         return pedidoService.registrarPedido(nome, telefone, cpf, itens, body.getMesa_numero());
     }
 
-    // GET /api/pedido/buscar?nome=luqui — protegido (equivalente a adminAuth no Node)
+    // GET /api/pedido/buscar?nome=joao — protegido (equivalente a adminAuth no Node)
     @GetMapping("/buscar")
-    public List<Pedido> buscar(@RequestParam("nome") String nomeParam, HttpServletRequest request) {
+    public List<PedidoResponse> buscar(@RequestParam("nome") String nomeParam, HttpServletRequest request) {
         adminAuthService.requireAdmin(request);
         String nome = ValidationUtil.cleanString(nomeParam, 80);
         if (nome.isEmpty()) throw ApiException.badRequest("Informe o nome.");

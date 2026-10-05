@@ -4,6 +4,8 @@ import com.pixevent.dto.*;
 import com.pixevent.entity.Pedido;
 import com.pixevent.entity.StatusPedido;
 import com.pixevent.exception.ApiException;
+import com.pixevent.mapper.MesaMapper;
+import com.pixevent.mapper.PedidoMapper;
 import com.pixevent.repository.MesaRepository;
 import com.pixevent.repository.PedidoRepository;
 import com.pixevent.service.MesaService;
@@ -22,10 +24,6 @@ import java.math.RoundingMode;
 import java.security.SecureRandom;
 import java.util.*;
 
-/**
-Todas as rotas (exceto /login) são protegidas pelo
- * AdminAuthInterceptor, registrado em WebConfig para o path /api/admin/**.
- */
 @RestController
 @RequestMapping("/api/admin")
 public class AdminController {
@@ -42,23 +40,27 @@ public class AdminController {
     private final RifaService rifaService;
     private final PedidoService pedidoService;
     private final AuthTokenUtil authTokenUtil;
+    private final PedidoMapper pedidoMapper;
+    private final MesaMapper mesaMapper;
 
     private final String adminPassword;
     private final String adminSecretLegado;
     private final String jwtExpiresIn;
 
     public AdminController(PedidoRepository pedidoRepository, MesaRepository mesaRepository,
-                            MesaService mesaService, RifaService rifaService, PedidoService pedidoService,
-                            AuthTokenUtil authTokenUtil,
-                            @org.springframework.beans.factory.annotation.Value("${app.admin.password:}") String adminPassword,
-                            @org.springframework.beans.factory.annotation.Value("${app.admin.secret:}") String adminSecretLegado,
-                            @org.springframework.beans.factory.annotation.Value("${app.jwt.expires-in:8h}") String jwtExpiresIn) {
+                           MesaService mesaService, RifaService rifaService, PedidoService pedidoService,
+                           AuthTokenUtil authTokenUtil, PedidoMapper pedidoMapper, MesaMapper mesaMapper,
+                           @org.springframework.beans.factory.annotation.Value("${app.admin.password:}") String adminPassword,
+                           @org.springframework.beans.factory.annotation.Value("${app.admin.secret:}") String adminSecretLegado,
+                           @org.springframework.beans.factory.annotation.Value("${app.jwt.expires-in:8h}") String jwtExpiresIn) {
         this.pedidoRepository = pedidoRepository;
         this.mesaRepository = mesaRepository;
         this.mesaService = mesaService;
         this.rifaService = rifaService;
         this.pedidoService = pedidoService;
         this.authTokenUtil = authTokenUtil;
+        this.pedidoMapper = pedidoMapper;
+        this.mesaMapper = mesaMapper;
         this.adminPassword = adminPassword;
         this.adminSecretLegado = adminSecretLegado;
         this.jwtExpiresIn = jwtExpiresIn;
@@ -87,14 +89,14 @@ public class AdminController {
         var stats = pedidoRepository.contarPorStatus();
         var mesas = mesaRepository.findAllByOrderByNumeroAsc();
         long totalRifas = rifaService.contarTotal();
-        return Map.of("stats", stats, "mesas", mesas, "total_rifas", totalRifas);
+        return Map.of("stats", stats, "mesas", mesaMapper.toAdminResponseList(mesas), "total_rifas", totalRifas);
     }
 
     // GET /api/admin/pedidos?status=pago&nome=luqui&page=1
     @GetMapping("/pedidos")
     public Map<String, Object> listarPedidos(@RequestParam(defaultValue = "1") int page,
-                                              @RequestParam(required = false) String status,
-                                              @RequestParam(required = false) String nome) {
+                                             @RequestParam(required = false) String status,
+                                             @RequestParam(required = false) String nome) {
         int limit = 50;
         String statusLimpo = ValidationUtil.cleanString(status, 30);
         String nomeLimpo = ValidationUtil.cleanString(nome, 80);
@@ -116,7 +118,7 @@ public class AdminController {
         }
 
         Map<String, Object> resp = new LinkedHashMap<>();
-        resp.put("pedidos", resultado.getContent());
+        resp.put("pedidos", pedidoMapper.toResponseList(resultado.getContent()));
         resp.put("total", resultado.getTotalElements());
         resp.put("paginas", resultado.getTotalPages());
         resp.put("pagina", page);
@@ -127,7 +129,7 @@ public class AdminController {
     @GetMapping("/pedidos/pagos")
     public Map<String, Object> pedidosPagos() {
         var pedidos = pedidoRepository.findByStatusOrderByPagoEmDesc(StatusPedido.PAGO);
-        return Map.of("total", pedidos.size(), "pedidos", pedidos);
+        return Map.of("total", pedidos.size(), "pedidos", pedidoMapper.toResponseList(pedidos));
     }
 
     // POST /api/admin/pedidos/{id}/confirmar
@@ -144,7 +146,7 @@ public class AdminController {
     @GetMapping("/pedidos/{id}")
     public Map<String, Object> buscarPorId(@PathVariable String id) {
         Pedido pedido = pedidoRepository.findById(id).orElseThrow(() -> ApiException.notFound("Pedido não encontrado."));
-        return Map.of("pedido", pedido);
+        return Map.of("pedido", pedidoMapper.toResponse(pedido));
     }
 
     // GET /api/admin/pedidos/{id}/ingresso — re-gera QR Code para download (token existente)
@@ -153,7 +155,7 @@ public class AdminController {
         Pedido pedido = pedidoRepository.findById(id).orElseThrow(() -> ApiException.notFound("Pedido não encontrado."));
         if (pedido.getStatus() != StatusPedido.PAGO) throw ApiException.conflict("Pedido ainda não confirmado.");
         String qrcodeBase64 = QrCodeUtil.toDataUrl(pedido.getQrcodeToken(), 300);
-        return Map.of("pedido", pedido, "qrcode_base64", qrcodeBase64);
+        return Map.of("pedido", pedidoMapper.toResponse(pedido), "qrcode_base64", qrcodeBase64);
     }
 
     // POST /api/admin/pedidos/{id}/ingresso/regenerar — gera novo token e novo QR Code
@@ -174,17 +176,17 @@ public class AdminController {
         pedidoRepository.save(pedido);
 
         String qrcodeBase64 = QrCodeUtil.toDataUrl(qrcodeToken, 300);
-        return Map.of("pedido", pedido, "qrcode_base64", qrcodeBase64);
+        return Map.of("pedido", pedidoMapper.toResponse(pedido), "qrcode_base64", qrcodeBase64);
     }
 
     // POST /api/admin/pedidos/{id}/cancelar
     @PostMapping("/pedidos/{id}/cancelar")
     public Map<String, Object> cancelar(@PathVariable String id) {
-        Object[] resultado = pedidoService.cancelarPedido(id);
+        var resultado = pedidoService.cancelarPedido(id);
         return Map.of("ok", true,
-                "pedido", resultado[0],
-                "mesas_liberadas", resultado[1],
-                "ja_cancelado", resultado[2]);
+                "pedido", resultado.pedido(),
+                "mesas_liberadas", resultado.mesasLiberadas(),
+                "ja_cancelado", resultado.jaCancelado());
     }
 
     // PUT /api/admin/pedidos/{id} — editar dados completos do pedido
@@ -245,7 +247,7 @@ public class AdminController {
         }
 
         pedidoRepository.save(pedido);
-        return Map.of("ok", true, "pedido", pedido);
+        return Map.of("ok", true, "pedido", pedidoMapper.toResponse(pedido));
     }
 
     // DELETE /api/admin/pedidos/{id}
@@ -282,7 +284,7 @@ public class AdminController {
     @GetMapping("/entradas")
     public Map<String, Object> entradas() {
         var entradas = pedidoRepository.findByQrcodeUsadoTrueOrderByQrcodeUsadoEmAsc();
-        return Map.of("entradas", entradas);
+        return Map.of("entradas", pedidoMapper.toResponseList(entradas));
     }
 
     private List<String> normalizarListaMesas(Object valor) {

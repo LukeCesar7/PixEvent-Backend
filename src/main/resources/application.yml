@@ -13,7 +13,7 @@ spring:
 
   jpa:
     hibernate:
-      # use "validate" em produção depois de rodar o schema.sql/migração inicial uma vez.
+      # Atenção! Lembrar que presciso usar "validate" em produção depois de rodar o schema.sql/migração inicial uma vez.
       ddl-auto: ${JPA_DDL_AUTO:update}
     show-sql: false
     properties:
@@ -22,6 +22,20 @@ spring:
         jdbc:
           time_zone: UTC
     open-in-view: false
+
+# Swagger UI: /swagger-ui.html   |   OpenAPI JSON: /v3/api-docs
+# Em produção, desligue com SWAGGER_ENABLED=false.
+springdoc:
+  api-docs:
+    enabled: ${SWAGGER_ENABLED:true}
+  swagger-ui:
+    enabled: ${SWAGGER_ENABLED:true}
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true
+    persist-authorization: true
+  default-produces-media-type: application/json
+  default-consumes-media-type: application/json
 
 app:
   base-url: ${BASE_URL:http://localhost:3001}

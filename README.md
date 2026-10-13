@@ -27,6 +27,8 @@
 - [Arquitetura](#arquitetura)
 - [Rodando o projeto](#rodando-o-projeto)
 - [Variáveis de ambiente](#variáveis-de-ambiente)
+- [Documentação interativa (Swagger)](#documentação-interativa-swagger)
+- [Testes](#testes)
 - [Referência da API](#referência-da-api)
 - [Segurança](#segurança)
 - [Limitações conhecidas e próximos passos](#limitações-conhecidas-e-próximos-passos)
@@ -220,6 +222,29 @@ curl http://localhost:3001/api/mesas
 | `RATE_LIMIT_SCANNER` | `80` | Requisições por janela, scanner |
 | `BACKUP_ON_START` | `true` (`false` no Compose) | Roda `pg_dump` ao iniciar |
 | `BACKUP_DIR` | `./backups` | Pasta de destino dos backups |
+
+## Documentação interativa (Swagger)
+
+Com a aplicação rodando:
+
+| O quê | URL |
+|---|---|
+| Swagger UI | `http://localhost:3001/swagger-ui.html` |
+| OpenAPI (JSON) | `http://localhost:3001/v3/api-docs` |
+
+Para testar rotas protegidas: chame `POST /api/admin/login`, copie o `token` da resposta, clique em
+**Authorize** e cole só o token (o prefixo `Bearer` é automático).
+Em produção, desligue com `SWAGGER_ENABLED=false`.
+
+## Testes
+
+```bash
+mvn test       # unitários (JUnit 5 + Mockito)            -> classes *Test
+mvn verify     # unitários + integração (Failsafe)         -> classes *Test e *IT
+```
+
+Os testes de integração sobem a aplicação inteira com **H2 em memória (modo PostgreSQL)** — não precisam
+de Docker nem de banco instalado. O perfil `test` está em `src/test/resources/application-test.yml`.
 
 ## Referência da API
 

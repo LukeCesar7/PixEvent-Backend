@@ -1,5 +1,13 @@
 package com.pixevent.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
+
 import com.pixevent.dto.*;
 import com.pixevent.entity.Pedido;
 import com.pixevent.entity.StatusPedido;
@@ -26,6 +34,9 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/admin")
+@Tag(name = "Admin", description = "Painel administrativo (exige token Bearer, exceto o login)")
+@SecurityRequirement(name = "bearerAuth")
+@ApiResponse(responseCode = "401", description = "Token ausente, inválido ou expirado")
 public class AdminController {
 
     private static final Map<String, BigDecimal> PRECOS = Map.of(
@@ -67,6 +78,14 @@ public class AdminController {
     }
 
     // POST /api/admin/login — troca a senha por token temporário
+    @Operation(summary = "Login do administrador", description = "Troca a senha por um token temporário (Bearer).")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Token emitido"),
+            @ApiResponse(responseCode = "401", description = "Senha incorreta"),
+            @ApiResponse(responseCode = "429", description = "Limite de tentativas excedido"),
+            @ApiResponse(responseCode = "500", description = "Senha do admin não configurada")
+    })
+    @SecurityRequirements
     @PostMapping("/login")
     public Map<String, Object> login(@RequestBody LoginRequest body) {
         String senha = body.getSenha() == null ? "" : body.getSenha();
@@ -84,19 +103,35 @@ public class AdminController {
     }
 
     // GET /api/admin/metricas
+    @Operation(summary = "Métricas gerais", description = "Totais por status do pedido (quantidade e receita), mapa de mesas e total de rifas.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Métricas")
+    })
     @GetMapping("/metricas")
     public Map<String, Object> metricas() {
-        var stats = pedidoRepository.contarPorStatus();
+        // Projeções do Spring Data são proxies; convertemos para mapas simples para a serialização JSON ser estável.
+        List<Map<String, Object>> stats = pedidoRepository.contarPorStatus().stream().map(sc -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("status", sc.getStatus().getValor());
+            m.put("total", sc.getTotal());
+            m.put("receita", sc.getReceita());
+            return m;
+        }).toList();
         var mesas = mesaRepository.findAllByOrderByNumeroAsc();
         long totalRifas = rifaService.contarTotal();
         return Map.of("stats", stats, "mesas", mesaMapper.toAdminResponseList(mesas), "total_rifas", totalRifas);
     }
 
     // GET /api/admin/pedidos?status=pago&nome=luqui&page=1
+    @Operation(summary = "Listar pedidos (paginado)", description = "50 por página, ordenado do mais recente ao mais antigo. Filtros opcionais por status e nome.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Página de pedidos"),
+            @ApiResponse(responseCode = "400", description = "Status inválido")
+    })
     @GetMapping("/pedidos")
-    public Map<String, Object> listarPedidos(@RequestParam(defaultValue = "1") int page,
-                                             @RequestParam(required = false) String status,
-                                             @RequestParam(required = false) String nome) {
+    public Map<String, Object> listarPedidos(@Parameter(description = "Número da página (começa em 1)") @RequestParam(defaultValue = "1") int page,
+                                             @Parameter(description = "Filtra por status: pendente, aguardando_pix, pago, cancelado, expirado") @RequestParam(required = false) String status,
+                                             @Parameter(description = "Busca parcial (sem diferenciar maiúsculas) no nome") @RequestParam(required = false) String nome) {
         int limit = 50;
         String statusLimpo = ValidationUtil.cleanString(status, 30);
         String nomeLimpo = ValidationUtil.cleanString(nome, 80);
@@ -106,11 +141,19 @@ public class AdminController {
         boolean temStatus = !statusLimpo.isBlank();
         boolean temNome = !nomeLimpo.isBlank();
 
+        StatusPedido statusFiltro = null;
+        if (temStatus) {
+            try {
+                statusFiltro = StatusPedido.fromValor(statusLimpo);
+            } catch (IllegalArgumentException e) {
+                throw ApiException.badRequest("Status inválido: " + statusLimpo);
+            }
+        }
+
         if (temStatus && temNome) {
-            resultado = pedidoRepository.findByStatusAndNomeContainingIgnoreCase(
-                    StatusPedido.fromValor(statusLimpo), nomeLimpo, pageable);
+            resultado = pedidoRepository.findByStatusAndNomeContainingIgnoreCase(statusFiltro, nomeLimpo, pageable);
         } else if (temStatus) {
-            resultado = pedidoRepository.findByStatus(StatusPedido.fromValor(statusLimpo), pageable);
+            resultado = pedidoRepository.findByStatus(statusFiltro, pageable);
         } else if (temNome) {
             resultado = pedidoRepository.findByNomeContainingIgnoreCase(nomeLimpo, pageable);
         } else {
@@ -126,6 +169,10 @@ public class AdminController {
     }
 
     // GET /api/admin/pedidos/pagos
+    @Operation(summary = "Listar pedidos pagos")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Pedidos com status pago")
+    })
     @GetMapping("/pedidos/pagos")
     public Map<String, Object> pedidosPagos() {
         var pedidos = pedidoRepository.findByStatusOrderByPagoEmDesc(StatusPedido.PAGO);
@@ -133,6 +180,12 @@ public class AdminController {
     }
 
     // POST /api/admin/pedidos/{id}/confirmar
+    @Operation(summary = "Confirmar pagamento manualmente", description = "Marca como pago, garante as mesas e gera o QR Code do ingresso.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Pedido confirmado + QR Code"),
+            @ApiResponse(responseCode = "404", description = "Pedido não encontrado"),
+            @ApiResponse(responseCode = "409", description = "Já confirmado, cancelado ou mesa indisponível")
+    })
     @PostMapping("/pedidos/{id}/confirmar")
     public Map<String, Object> confirmar(@PathVariable String id) {
         var resultado = pedidoService.confirmarManual(id);
@@ -143,13 +196,24 @@ public class AdminController {
     }
 
     // GET /api/admin/pedidos/{id}
+    @Operation(summary = "Buscar pedido por ID")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Pedido"),
+            @ApiResponse(responseCode = "404", description = "Pedido não encontrado")
+    })
     @GetMapping("/pedidos/{id}")
     public Map<String, Object> buscarPorId(@PathVariable String id) {
         Pedido pedido = pedidoRepository.findById(id).orElseThrow(() -> ApiException.notFound("Pedido não encontrado."));
         return Map.of("pedido", pedidoMapper.toResponse(pedido));
     }
 
-    // GET /api/admin/pedidos/{id}/ingresso — re-gera QR Code para download (token existente)
+    // GET /api/admin/pedidos/{id}/ingresso — regera QRCode para download (token existente)
+    @Operation(summary = "Obter ingresso (QR Code)", description = "Regera a imagem do QR Code a partir do token existente.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Pedido + QR Code em data URL"),
+            @ApiResponse(responseCode = "404", description = "Pedido não encontrado"),
+            @ApiResponse(responseCode = "409", description = "Pedido ainda não confirmado")
+    })
     @GetMapping("/pedidos/{id}/ingresso")
     public Map<String, Object> ingresso(@PathVariable String id) {
         Pedido pedido = pedidoRepository.findById(id).orElseThrow(() -> ApiException.notFound("Pedido não encontrado."));
@@ -158,7 +222,13 @@ public class AdminController {
         return Map.of("pedido", pedidoMapper.toResponse(pedido), "qrcode_base64", qrcodeBase64);
     }
 
-    // POST /api/admin/pedidos/{id}/ingresso/regenerar — gera novo token e novo QR Code
+    // POST /api/admin/pedidos/{id}/ingresso/regenerar — gera novo token e novo QRCode
+    @Operation(summary = "Regenerar ingresso", description = "Gera um novo token (invalida o anterior) e zera o status de uso.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Novo QR Code"),
+            @ApiResponse(responseCode = "404", description = "Pedido não encontrado"),
+            @ApiResponse(responseCode = "409", description = "Pedido ainda não confirmado")
+    })
     @PostMapping("/pedidos/{id}/ingresso/regenerar")
     public Map<String, Object> regenerarIngresso(@PathVariable String id) {
         Pedido pedido = pedidoRepository.findById(id).orElseThrow(() -> ApiException.notFound("Pedido não encontrado."));
@@ -180,6 +250,11 @@ public class AdminController {
     }
 
     // POST /api/admin/pedidos/{id}/cancelar
+    @Operation(summary = "Cancelar pedido", description = "Libera as mesas e invalida o QR Code. Idempotente (ja_cancelado = true).")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Pedido cancelado"),
+            @ApiResponse(responseCode = "404", description = "Pedido não encontrado")
+    })
     @PostMapping("/pedidos/{id}/cancelar")
     public Map<String, Object> cancelar(@PathVariable String id) {
         var resultado = pedidoService.cancelarPedido(id);
@@ -190,6 +265,12 @@ public class AdminController {
     }
 
     // PUT /api/admin/pedidos/{id} — editar dados completos do pedido
+    @Operation(summary = "Editar pedido", description = "Atualiza dados do cliente e, se informado, itens/mesas (recalcula o valor).")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Pedido atualizado"),
+            @ApiResponse(responseCode = "400", description = "Dados inválidos"),
+            @ApiResponse(responseCode = "404", description = "Pedido não encontrado")
+    })
     @PutMapping("/pedidos/{id}")
     public Map<String, Object> editar(@PathVariable String id, @RequestBody PedidoRequest body) {
         Pedido pedido = pedidoRepository.findById(id).orElseThrow(() -> ApiException.notFound("Pedido não encontrado."));
@@ -251,6 +332,11 @@ public class AdminController {
     }
 
     // DELETE /api/admin/pedidos/{id}
+    @Operation(summary = "Excluir pedido", description = "Libera as mesas e remove o pedido definitivamente.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Pedido excluído"),
+            @ApiResponse(responseCode = "404", description = "Pedido não encontrado")
+    })
     @DeleteMapping("/pedidos/{id}")
     public Map<String, Object> excluir(@PathVariable String id) {
         Pedido pedido = pedidoRepository.findById(id).orElseThrow(() -> ApiException.notFound("Pedido não encontrado."));
@@ -261,6 +347,12 @@ public class AdminController {
     }
 
     // POST /api/admin/pedidos — inserir pedido manualmente
+    @Operation(summary = "Inserir pedido manualmente")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Pedido criado"),
+            @ApiResponse(responseCode = "400", description = "Dados inválidos"),
+            @ApiResponse(responseCode = "409", description = "Mesa já reservada")
+    })
     @PostMapping("/pedidos")
     public Map<String, Object> inserir(@RequestBody PedidoRequest body) {
         String nome = ValidationUtil.cleanString(body.getNome(), 120);
@@ -281,6 +373,10 @@ public class AdminController {
     }
 
     // GET /api/admin/entradas — lista convidados que já entraram
+    @Operation(summary = "Listar entradas (check-ins)", description = "Convidados cujo QR Code já foi validado, em ordem de entrada.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Lista de entradas")
+    })
     @GetMapping("/entradas")
     public Map<String, Object> entradas() {
         var entradas = pedidoRepository.findByQrcodeUsadoTrueOrderByQrcodeUsadoEmAsc();

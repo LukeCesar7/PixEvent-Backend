@@ -1,5 +1,13 @@
 package com.pixevent.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
+
 import com.pixevent.entity.Pedido;
 import com.pixevent.entity.Rifa;
 import com.pixevent.entity.StatusPedido;
@@ -20,6 +28,9 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/scanner")
+@Tag(name = "Scanner", description = "Validação de QR Code na portaria (exige token Bearer)")
+@SecurityRequirement(name = "bearerAuth")
+
 public class ScannerController {
 
     private final PedidoRepository pedidoRepository;
@@ -30,6 +41,13 @@ public class ScannerController {
         this.rifaService = rifaService;
     }
 
+    @Operation(summary = "Validar QR Code", description = "Responde 200 com valido=true/false. Se válido, o QR Code é marcado como usado (uso único).")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Resultado da validação (campo valido)"),
+            @ApiResponse(responseCode = "401", description = "Não autorizado"),
+            @ApiResponse(responseCode = "429", description = "Limite de requisições excedido")
+    })
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = com.pixevent.dto.ScannerRequest.class)))
     @PostMapping("/validar")
     public Map<String, Object> validar(@RequestBody Map<String, Object> body) {
         String token = ValidationUtil.cleanString(body.get("token"), 120);
